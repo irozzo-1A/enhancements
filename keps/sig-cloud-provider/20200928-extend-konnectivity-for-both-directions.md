@@ -33,6 +33,7 @@ status: draft
   - [Listening Interface for Konnectivity agent](#listening-interface-for-konnectivity-agent)
   - [Authentication](#authentication)
   - [Risks and Mitigations](#risks-and-mitigations)
+    - [Allow list](#allow-list)
 - [Design Details](#design-details)
   - [Test Plan](#test-plan)
   - [Graduation Criteria](#graduation-criteria)
@@ -55,17 +56,17 @@ status: draft
 
 ## Summary
 
-The goal of this proposal is to allow traffic to flow from the cluster network (agent side) to the control plane (Apiserver network proxy).
+The goal of this proposal is to allow traffic to flow from the Node Network to the Master Network.
 
 ## Motivation
 
-API server network proxy has been originally introduced to allow running the cluster nodes on distinct isolated networks with respect to the one hosting the control plane components. This provides a way to handle traffic originating from the Kube API Server and going to the cluster networks. When using this setup, there are no other options than to directly expose the KAS to the Internet or setting up a VPN to handle traffic originated from the cluster nodes (i.e. Kubelet, pods). This could lead to security risks or complicated setups. 
+API server network proxy has been originally introduced to allow running the cluster nodes on distinct isolated networks with respect to the one hosting the control plane components. This provides a way to handle traffic originating from the Kube API Server and going to the node networks. When using this setup, there are no other options than to directly expose the KAS to the Internet or setting up a VPN to handle traffic originated from the cluster nodes (i.e. Kubelet, pods). This could lead to security risks or complicated setups. 
 Extending the API server network proxy to allow handling traffic in both directions seems to be the most consistent approach to address this issue. 
 Moreover, this will provide the possibility of routing agents’ traffic to their dedicated KAS based on SNI, enabling the option of load balancing traffic directed to different clusters with a single load balancer.
 
 ### Goals
 
-* Handle requests from the Cluster to the Control Plane. Enable communication from the Node Network to the Master Network without having to expose the KAS to the internet.
+* Handle requests from the nodes to the control plane. Enable communication from the Node Network to the Master Network without having to expose the KAS to the Node Network.
 
 ### Non-Goals
 
@@ -85,7 +86,9 @@ Moreover, this will provide the possibility of routing agents’ traffic to thei
 
 Currently the Konnectivity Server is accepting requests from the KAS either with the gRPC or the HTTP Connect interfaces and is taking care of forwarding the traffic to the Konnectivity Agent using the previously established connections (initiated by the Agents). 
 
-In order to enable traffic from Kubelets and Pods running on Master Network, the Konnectivity Agents have to expose an endpoint that will be listening on a specific port for each of the destinations on the Control Network. As opposed to the traffic flowing from the Control Network to the Cluster Network, the Konnectivity Agent should act transparently: From a Kubelets or Pods standpoint, the Konnectivity Agent should be the final destination instead of acting as a proxy. The reason why we do not intend to use the same strategy used in the other direction is that we do not have control over the clients using the Kubernetes default service to communicate with the KAS.
+In order to enable traffic from Kubelets and Pods running on Master Network, the Konnectivity Agents have to expose an endpoint that will be listening on a specific port for each of the destinations on the Master Network. As opposed to the traffic flowing from the Master Network to the Node Network, the Konnectivity Agent should act transparently: From a Kubelets or Pods standpoint, the Konnectivity Agent should be the final destination instead of acting as a proxy. 
+
+The reason why we do not intend to use the same strategy used in the other direction is that we do not have control over the clients using the Kubernetes default service to communicate with the KAS.
 
 ### Traffic Flow
 
@@ -101,13 +104,13 @@ The agent listens for TCP connections at a specific port for each configured des
 2. Upon reception of the DIAL_REQ the Konnectivity Server opens a TCP connection with the destination host/port and replies to the Konnectivity Agent with a GRPC DIAL_RES message.
 3. At this point the tunnel is established and data is piped through it, carried over GRPC DATA packets.
 
-An executable capable of providing container registry credentials will be pre-installed on each node so that it exists when kubelet starts running. This binary will be executed by the kubelet to obtain container registry credentials in a format compatible with container runtimes. Credential responses may be cached within the kubelet.
-
 ### Agent additional flags
 
-* `--target=dst_host_ip:dst_port:local_port`: We can have multiple of those in order to support multiple destinations on the Master Network.
-Dst_host_ip: end target IP (apiserver or something else)
-e.g. --target=apiserver.svc.cluster.local:6443:6443
+* `--target=local_port:dst_host_ip:dst_port`: We can have multiple of those in order to support multiple destinations on the Master Network.
+Dst_host_ip: end target IP (apiserver or something else). In case of IPv6
+the address should be wrapped in squared brackets, consistently with [RFC3986](https://www.ietf.org/rfc/rfc3986.txt) notation.
+e.g. --target=6443:apiserver.svc.cluster.local:6443
+e.g. --target=6443:[2001:db8:1f70::999:de8:7648:6e8]:6443
 
 * `--bind-address=ip`: Local IP address where the Konnectivity Agent will listen for incoming requests. It will be bound to a dummy IP interface with IP x.y.z.v defined by the user. Must be used with the previous one to enable incoming requests. If not, and for backward compatibility, only the traffic initiated from the Control Plane will be allowed.
 
@@ -124,7 +127,7 @@ Instead of specifying the KAS FQDN/address in the bootstrap kubeconfig file, we 
 
 ### Deployment Model
 
-The agent can be run as static pod or systemd units. In any case the agent should be started to give access to the KAS to the kubelet first and to the hosted pods later. This means that using DaemonSets or Deployments is not an option in this setup.
+The agent can be run as static pod or systemd units. In any case the agent should be started to give access to the KAS to the kubelet first and to the hosted pods later. This means that using DaemonSets or Deployments is not an option in this setup, because the kubelet would not be able to get the pod manifests from the KAS.
 
 ### Listening Interface for Konnectivity agent
 
@@ -139,7 +142,30 @@ Konnectivity agent currently support mTLS or Token based authentication. Note th
 
 ### Risks and Mitigations
 
-TODO
+#### Allow List
+
+> A generic TCP tunnel is fraught with security risks. First, such
+> authorization should be limited to a small number of known ports.
+> The Upgrade: mechanism defined here only requires onward tunneling at
+> port 80. Second, since tunneled data is opaque to the proxy, there
+> are additional risks to tunneling to other well-known or reserved
+> ports. A putative HTTP client CONNECTing to port 25 could relay spam
+> via SMTP, for example.
+> -- <cite>[rfc2817][http_upgrade_tls_rfc]</cite>
+
+Similarly to CONNECT tunnel this feature opens the door to generic TCP tunnels
+to arbitrary destinations.
+
+A mechanism for restricting access to the possible destinations on the Master Network should be implemented on the Konnectivity server.
+The list of allowed destinations will be provided with the following flag:
+
+* `--allowed-destination=dst_host:dst_port`: We can have multiple of those in
+    order to allow access to multiple destinations.
+
+TODO(irozzo/yazrak): What happens if DIAL_REQ is received by the server for a destination
+that is not in the allow list? Should we put in place a health-check mechanism
+to make sure agent configuration is consistent with the allow list?
+
 
 ## Design Details
 
