@@ -183,7 +183,9 @@ demonstrate the interest in a KEP within the wider Kubernetes community.
 [experience reports]: https://github.com/golang/go/wiki/ExperienceReports
 -->
 
-API server network proxy has been originally introduced to allow running the cluster nodes on distinct isolated networks with respect to the one hosting the control plane components. This provides a way to handle traffic originating from the Kube API Server and going to the node networks. When using this setup, there are no other options than to directly expose the KAS to the Internet or setting up a VPN to handle traffic originated from the cluster nodes (i.e. Kubelet, pods). This could lead to security risks or complicated setups. 
+API server network proxy has been originally introduced to allow running the cluster nodes on distinct isolated networks with respect to the one hosting the control plane components. This provides a way to handle traffic originating from the Kube API Server and going to the node networks. When using this setup, there are no other options than to directly expose the KAS to the Internet or setting up a VPN to handle traffic originated from the cluster nodes (i.e. Kubelet, pods).
+Exposing Konnectivity Proxy Server only would add an additional layer of security, given that the tunnels with proxy agents are secured with mTLS or Token authentication. This would protect it, for instance, from KAS misconfigurations or vulnerabilities that could expose sensitive information and/or access to unauthenticated users.
+Furthermore there is no standard solution for this kind of setup. It is possible to rely on VPNs for example to achieve a similar goal, but this requires specific implementations. What we propose here is to build on top of what we have, and having a consistent approach for master to node and node to master communications.
 Extending the API server network proxy to allow handling traffic in both directions seems to be the most consistent approach to address this issue. 
 Moreover, this will provide the possibility of routing agents’ traffic to their dedicated KAS based on SNI, enabling the option of load balancing traffic directed to different clusters with a single load balancer.
 
@@ -238,16 +240,19 @@ client =TCP=> (:6443) agent GRPC=> server =TCP=> KAS(:6443)
                          +------------+
 ```
 
-The agent listens for TCP connections at a specific port for each configured destination. When a connection request is received by the Konnectivity Agent the following happens:
+The agent listens for TCP connections at a specific port for each configured destination. When a TCP connection is established between the client and the Konnectivity Agent, the following happens:
 1. A GRPC DIAL_REQ message is sent to the Konnectivity server containing the destination address associated with the current port.
-2. Upon reception of the DIAL_REQ the Konnectivity Server opens a TCP connection with the destination host/port and replies to the Konnectivity Agent with a GRPC DIAL_RES message.
-3. At this point the tunnel is established and data is piped through it, carried over GRPC DATA packets.
+2. Upon reception of the DIAL_REQ the Konnectivity Server verifies if the destination is allowed (see [allow list](#allow-list) section). If not allowed a DIAL_RSP containing an error is sent back immediately to the agent that terminates the connection.
+3. In case the destination is allowed Konnectivity Server opens a TCP connection with the destination host/port and replies to the Konnectivity Agent with a GRPC DIAL_RES message.
+4. At this point the tunnel is established and data is piped through it, carried over GRPC DATA packets.
 
 ### Agent additional flags
 
-* `--target=local_port:dst_host_ip:dst_port`: We can have multiple of those in order to support multiple destinations on the Master Network.
-Dst_host_ip: end target IP (apiserver or something else). In case of IPv6
-the address should be wrapped in squared brackets, consistently with [RFC3986](https://www.ietf.org/rfc/rfc3986.txt) notation.
+* `--target=local_port:dst_host_ip:dst_port`:
+    - local_port: The local port where the agent binds to.
+    - dst_host_ip: Ip or hostname used by the KAS. In case of IPv6
+    the address should be wrapped in squared brackets, consistently with [RFC3986](https://www.ietf.org/rfc/rfc3986.txt) notation.
+    - dst_port: The remote port used by the KAS. 
 e.g. --target=6443:apiserver.svc.cluster.local:6443
 e.g. --target=6443:[2001:db8:1f70::999:de8:7648:6e8]:6443
 
@@ -256,8 +261,8 @@ e.g. --target=6443:[2001:db8:1f70::999:de8:7648:6e8]:6443
 ### Handling the Traffic from the Pods to the Agent
 
 As mentioned above, pods make use of  the Kubernetes default service to reach the KAS. To keep things transparent from a Pod perspective, they will hit the Konnectivity Agent using the Kubernetes default service. The endpoint will be the Konnectivity Agent instead of the KAS. 
-The configuration part of the Kubernetes default service will be done using the Apiserver flag `--advertise-address ip` on the Control Plane side.
-`--advertise-address ip` should match the `--bind-address ip` of the Konnectivity Agent described above. 
+The configuration part of the Kubernetes default service will be done using the Apiserver flag `--advertise-address ip` and `--secure-port port` on the Control Plane side.
+The `advertise-address` and the `secure-port` should match respectively the `bind-address` and the `local_port` of the Konnectivity Agent described above. 
 
 ### Handling the Traffic from the Kubelet to the Agent
 
@@ -275,7 +280,7 @@ As mentioned before, we will be using the Kubernetes default service to route tr
 When using a StaticPod, the Agent Pod will create a dummy interface (using an init container?), bind to the IP given in the argument `--bind-address` and will start to listen on this IP:local_port (local_port is defined with the `--target` argument).
 With systemd the principle is the same, but the creation and configuration of the interface could be handled with `ExecStartPre` commands.
 
-### Authentication
+### Authentication between Konnectivity agent and server
 
 Konnectivity agent currently support mTLS or Token based authentication. Note that API objects such as Secrets cannot be accessed either when a StaticPod or Systemd service deployment strategy is used. The authentication secret should be made available to the agent through a different channel (e.g. provisioned in the worker node file-system).
 
