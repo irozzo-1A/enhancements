@@ -84,15 +84,15 @@ tags, and then generate with `hack/update-toc.sh`.
   - [Non-Goals](#non-goals)
 - [Definitions](#definitions)
 - [Proposal](#proposal)
-  - [Traffic flow](#traffic-flow)
+  - [Traffic Flow](#traffic-flow)
   - [Agent additional flags](#agent-additional-flags)
   - [Handling the Traffic from the Pods to the Agent](#handling-the-traffic-from-the-pods-to-the-agent)
   - [Handling the Traffic from the Kubelet to the Agent](#handling-the-traffic-from-the-kubelet-to-the-agent)
   - [Deployment Model](#deployment-model)
   - [Listening Interface for Konnectivity agent](#listening-interface-for-konnectivity-agent)
-  - [Authentication](#authentication)
+  - [Authentication between Konnectivity agent and server](#authentication-between-konnectivity-agent-and-server)
   - [Risks and Mitigations](#risks-and-mitigations)
-    - [Allow list](#allow-list)
+    - [Allow List](#allow-list)
 - [Design Details](#design-details)
   - [Test Plan](#test-plan)
   - [Graduation Criteria](#graduation-criteria)
@@ -108,7 +108,7 @@ tags, and then generate with `hack/update-toc.sh`.
 - [Implementation History](#implementation-history)
 - [Drawbacks](#drawbacks)
 - [Alternatives](#alternatives)
-- [Infrastructure Needed](#infrastructure-needed)
+- [Infrastructure Needed (Optional)](#infrastructure-needed-optional)
 <!-- /toc -->
 
 ## Release Signoff Checklist
