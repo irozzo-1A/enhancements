@@ -1,17 +1,4 @@
-----
--title: Out-of-Tree Credential Providers
--authors:
--  - "@irozzo-1A"
--  - "@youssefazrak"
--owning-sig: sig-cloud-provider
--reviewers:
--  - "@cheftako"
--approvers: TBD
--editor: TBD
--creation-date: 2020-09-28
--last-updated: 2020-09-28
--status: draft
-----title: KEP Template
+title: Extending Apiserver Network Proxy to handle traffic originated from Node network
 kep-number: 2025
 authors:
   - "@irozzo-1A"
