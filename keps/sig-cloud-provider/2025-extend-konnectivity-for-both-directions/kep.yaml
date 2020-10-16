@@ -17,7 +17,7 @@ reviewers:
 approvers:
   - TBD
 prr-approvers:
-  - TBD
+  - johnbelamaric
 see-also:
   - "keps/sig-api-machinery/20190226-network-proxy.md"
 replaces:
