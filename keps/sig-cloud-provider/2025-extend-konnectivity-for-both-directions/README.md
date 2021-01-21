@@ -256,7 +256,7 @@ The agent listens for TCP connections at a specific port for each configured des
 e.g. --target=6443:apiserver.svc.cluster.local:6443
 e.g. --target=6443:[2001:db8:1f70::999:de8:7648:6e8]:6443
 
-* `--bind-address=ip`: Local IP address where the Konnectivity Agent will listen for incoming requests. It will be bound to a dummy IP interface with IP x.y.z.v defined by the user. Must be used with the previous one to enable incoming requests. If not, and for backward compatibility, only the traffic initiated from the Control Plane will be allowed.
+* `--bind-address=ip`: Local IP address where the Konnectivity Agent will listen for incoming requests. It will be bound to a dummy interface with IP x.y.z.v defined by the user. Must be used with the previous one to enable incoming requests. If not, and for backward compatibility, only the traffic initiated from the Control Plane will be allowed.
 
 ### Handling the Traffic from the Pods to the Agent
 
@@ -271,14 +271,14 @@ Instead of specifying the KAS FQDN/address in the bootstrap kubeconfig file, we 
 
 ### Deployment Model
 
-The agent can be run as static pod or systemd units. In any case the agent should be started to give access to the KAS to the kubelet first and to the hosted pods later. This means that using DaemonSets or Deployments is not an option in this setup, because the kubelet would not be able to get the pod manifests from the KAS.
+The agent can be run as static pod or systemd unit. In any case the agent should be started to give access to the KAS to the kubelet first and to the hosted pods later. This means that using DaemonSets or Deployments is not an option in this setup, because the kubelet would not be able to get the pod manifests from the KAS.
+Note that no communication between kubelet/pods on the node network and KAS will be possible until the agent is up and running. Therefore the kubelet must handle the absence of connectivity with the KAS properly (e.g. verify retry logic).
 
 ### Listening Interface for Konnectivity agent
 
 As mentioned before, we will be using the Kubernetes default service to route traffic to the Agent. The service in itself has a couple of limitations: it can’t be used as a type externalName, thus preventing the use of dynamic IPs (say, Pods’ networking range). But also, some general services limitations apply: endpoints can’t use the link-local range and the localhost range. This means that we are left with the 3 private IPs ranges (10.0.0.0/8, 172.16.0.0/12 and 192.168.0.0/16). 
 
-When using a StaticPod, the Agent Pod will create a dummy interface (using an init container?), bind to the IP given in the argument `--bind-address` and will start to listen on this IP:local_port (local_port is defined with the `--target` argument).
-With systemd the principle is the same, but the creation and configuration of the interface could be handled with `ExecStartPre` commands.
+The Agent will create a dummy interface, assign it the IP given in the argument `--bind-address` with `host` scope and will start to listen on this IP:local_port (local_port is defined with the `--target` argument).
 
 ### Authentication between Konnectivity agent and server
 
@@ -420,6 +420,13 @@ enhancement:
 - What changes (in invocations, configurations, API use, etc.) is an existing
   cluster required to make on upgrade, in order to make use of the enhancement?
 -->
+When activating this feature the upgrade of the agents will be more complicated
+as we cannot rely on Kubernetes resources like DaemonSet or Deployment.
+Upgrading the agent will look more like upgrading the Kubelet. This can be
+achieved either in place, by changing and restarting the systemd unit on every
+node or by changing the manifests if static pods are used.
+The alternative, in case in-place updates are not an option, is to create a new
+set of nodes with the new configuration and replace the old ones.
 
 ### Version Skew Strategy
 
@@ -463,30 +470,44 @@ you need any help or guidance.
 
 ### Feature Enablement and Rollback
 
-_This section must be completed when targeting alpha to a release._
-
 * **How can this feature be enabled / disabled in a live cluster?**
-  - [ ] Feature gate (also fill in values in `kep.yaml`)
-    - Feature gate name:
-    - Components depending on the feature gate:
-  - [ ] Other
-    - Describe the mechanism:
-    - Will enabling / disabling the feature require downtime of the control
-      plane?
-    - Will enabling / disabling the feature require downtime or reprovisioning
-      of a node? (Do not assume `Dynamic Kubelet Config` feature is enabled).
+  - [*] Feature gate (also fill in values in `kep.yaml`)
+    - Feature gate name: EnableClusterToMasterTraffic
+    - Components depending on the feature gate: Konnectivity server and agent
+  - [*] Other
+    - This is the procedure to enable in a live cluster assuming that the
+      secure port of KAS is 6443 and the ip address choosen for the agent is
+      `10.0.0.1`:
+      1. Deploy the Konnectivity agent in the nodes by using a static pod or a
+         systemd unit. Add the following flags to enable the feature and to
+         forward local port 6443 to `localhost:6443` on Konnectivity server
+         side:
+         `--feature-gates="EnableClusterToMasterTraffic=true"`
+         `--target=6443:localhost:6443`
+      2. Deploy the Konnectivity server following the documented procedure, but
+         adding the following flags to enable the feature and to allow traffic
+         to `localhost:6443`:
+         `--feature-gates="EnableClusterToMasterTraffic=true"`
+         `--allowed-destination=localhost:6443`.
+      3. Add the following flags to the KAS `--advertise-address=10.0.0.1`,
+         `--secure-port=6443`, and restart the service for all master nodes.
+    - In order to disable the feature you just need to remove or re-establish
+      the original `--advertise-address` flag and restart the KAS services on
+      all nodes.
 
 * **Does enabling the feature change any default behavior?**
-  Any change of default behavior may be surprising to users or break existing
-  automations, so be extremely careful here.
+  Yes, all traffic originated from node network will pass from the Konnectivity
+  agents. In case network proxies are used, the agent should be configured
+  properly, and the ip used by the agents should be included in `no_proxy`
+  environment variable.
 
 * **Can the feature be disabled once it has been enabled (i.e. can we roll back
   the enablement)?**
-  Also set `disable-supported` to `true` or `false` in `kep.yaml`.
-  Describe the consequences on existing workloads (e.g., if this is a runtime
-  feature, can it break the existing applications?).
+  Yes, it can be disabled by simply changing the KAS `--advertise-address` and
+  `--secure-port` flags.
 
 * **What happens if we reenable the feature if it was previously rolled back?**
+  Rolling back have no impact on subsequen re-enablements.
 
 * **Are there any tests for feature enablement/disablement?**
   The e2e framework does not currently support enabling or disabling feature
